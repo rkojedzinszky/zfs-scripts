@@ -38,7 +38,7 @@ def zfs_pull(srchost, srcds, dstds, fromsnap, tosnap):
         message = 'Pulling snapshot for {}/{}: ({}, {}] to {}'.format(srchost, srcds, fromsnap, tosnap, dstds)
         sendcmd = 'zfs send -I {} {}@{}'.format(fromsnap, srcds, tosnap)
 
-    fullcmd = '{} {} "{}" | zfs receive -x mountpoint -F -d {}'.format(SSH_CMD, srchost, sendcmd, dstds)
+    fullcmd = '{} {} "{}" | zfs receive -o readonly=on -x mountpoint -F -d {}'.format(SSH_CMD, srchost, sendcmd, dstds)
 
     start = time.time()
     syslog.syslog(syslog.LOG_INFO, message)
