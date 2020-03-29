@@ -1,12 +1,18 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
-from __future__ import print_function, unicode_literals
 import argparse
 import subprocess
 import syslog
 import fcntl
 import os
 import time
+from pipemeter import pipemeter
+
+compress = {
+        'lz4':  ['lz4 -c', 'lz4 -dc'],
+        'gzip': ['gzip -c', 'gzip -dc'],
+        'xz':   ['xz -c', 'xz -dc'],
+        }
 
 class FileLock(object):
     def __init__(self, lockfile):
@@ -29,6 +35,7 @@ class FileLock(object):
         self.release()
 
 SSH_CMD = 'ssh -o BatchMode=yes'
+COMPRESS = None
 
 def zfs_pull(srchost, srcds, dstds, fromsnap, tosnap):
     if fromsnap is None:
@@ -38,19 +45,29 @@ def zfs_pull(srchost, srcds, dstds, fromsnap, tosnap):
         message = 'Pulling snapshot for {}/{}: ({}, {}] to {}'.format(srchost, srcds, fromsnap, tosnap, dstds)
         sendcmd = 'zfs send -I {} {}@{}'.format(fromsnap, srcds, tosnap)
 
-    fullcmd = '{} {} "{}" | zfs receive -o readonly=on -x mountpoint -F -d {}'.format(SSH_CMD, srchost, sendcmd, dstds)
+    comp, decomp = "", ""
+    if COMPRESS:
+        comp = " | {}".format(COMPRESS[0])
+        decomp = "{} |".format(COMPRESS[1])
+
+    send = '{} {} "{}{}"'.format(SSH_CMD, srchost, sendcmd, comp)
+    recv = '{}zfs receive -o readonly=on -x mountpoint -F -d {}'.format(decomp, dstds)
 
     start = time.time()
     syslog.syslog(syslog.LOG_INFO, message)
-    subprocess.check_call([fullcmd], shell=True)
+    send_ret, recv_ret, bytes_total = pipemeter(send, recv)
+    if send_ret != 0:
+        raise RuntimeError("Error running {}".format(send))
+    if recv_ret != 0:
+        raise RuntimeError("Error running {}".format(recv))
     end = time.time()
-    syslog.syslog(syslog.LOG_INFO, '{} FINISHED IN {:.2f} seconds'.format(message, end - start))
+    syslog.syslog(syslog.LOG_INFO, '{} FINISHED IN {:.2f} seconds, {:d} bytes transferred'.format(message, end - start, bytes_total))
 
 def read_snapshots(dataset):
-    return [snap for snap in subprocess.check_output(['zfs list -t snapshot -S creation -d 1 -H -o name {} | sed -e "s/.*@//"'.format(dataset)], shell=True).split('\n') if snap != '']
+    return [snap for snap in subprocess.check_output(['zfs list -t snapshot -S creation -d 1 -H -o name {} | sed -e "s/.*@//"'.format(dataset)], shell=True).decode().split('\n') if snap != '']
 
 def read_remote_snapshots(host, dataset):
-    return [snap for snap in subprocess.check_output(['{} {} "zfs list -t snapshot -S creation -d 1 -H -o name {} | sed -e \\"s/.*@//\\""'.format(SSH_CMD, host, dataset)], shell=True).split('\n') if snap != '']
+    return [snap for snap in subprocess.check_output(['{} {} "zfs list -t snapshot -S creation -d 1 -H -o name {} | sed -e \\"s/.*@//\\""'.format(SSH_CMD, host, dataset)], shell=True).decode().split('\n') if snap != '']
 
 def main(srchost, srcds, dstds):
 
@@ -82,6 +99,12 @@ if __name__ == '__main__':
     if len(sys.argv) < 4:
         sys.stderr.write('Usage: {} <src host> <src ds> <dest ds>'.format(sys.argv[0]))
         sys.exit(1)
+
+    compress_method = os.getenv("ZFS_PULL_COMPRESS", None)
+    if compress_method:
+        COMPRESS = compress.get(compress_method, None)
+        if COMPRESS is None:
+            raise RuntimeError("Invalid compress method: {}".format(compress_method))
 
     ldataset = sys.argv[3]
 
