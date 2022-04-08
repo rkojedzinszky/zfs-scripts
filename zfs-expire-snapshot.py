@@ -29,7 +29,7 @@ def parse_snapshot(snapshot_name):
 
 def expire_snapshots(dataset, recursive, expires):
     cmd = "/sbin/zfs list -t snapshot -H -o name -s name {} {}".format("-r" if recursive else "-d 1", dataset)
-    for s in subprocess.check_output(cmd, shell=True).split('\n'):
+    for s in subprocess.check_output(cmd, shell=True).decode().split('\n'):
         if s == '':
             break
 
